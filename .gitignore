@@ -1,0 +1,17 @@
+node_modules/
+dist/
+logs/
+*.log
+.env
+.env.local
+.DS_Store
+
+# Docker - lokalne nadpisania (commitowane: compose dev + example)
+docker-compose.override.yml
+
+# Compose serwerowy - zawiera wewnetrzny rejestr i domene prod (repo jest publiczne)
+docker-compose.yml
+
+# Skrypt deploymentowy (lokalny, zawiera adresy serwera)
+buildandpush.ps1
+

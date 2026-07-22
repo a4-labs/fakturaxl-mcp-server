@@ -1,0 +1,29 @@
+# Lokalny development na Dockerze (hot-reload przez tsx watch).
+# Uruchomienie:  docker compose -f docker-compose.dev.yml up --build
+# Serwer MCP:    http://localhost:3000/mcp   (health: /health)
+# Bez Traefika - port mapowany bezposrednio na host.
+
+services:
+  fakturaxl-mcp:
+    build:
+      context: .
+      target: dev
+    container_name: fakturaxl-mcp-dev
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - LOG_LEVEL=debug
+      - LOG_TO_FILE=false
+      - FAKTURAXL_BASE_URL=https://program.fakturaxl.pl/api
+      - FAKTURAXL_TIMEOUT_MS=30000
+      - DEFAULT_LIST_LIMIT=50
+      - MAX_LIST_LIMIT=500
+      - MAX_RANGE_MONTHS=24
+      - CACHE_TTL_MS=300000
+      - PAGE_SIZE=500
+      - RATE_LIMIT_RETRIES=5
+    ports:
+      - "3000:3000"
+    volumes:
+      # Hot-reload: montujemy zrodla, node_modules zostaja z obrazu
+      - ./src:/app/src

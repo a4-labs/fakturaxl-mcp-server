@@ -1,0 +1,44 @@
+# SZABLON (przyklad) docker-compose dla wdrozenia za Traefikiem.
+# Skopiuj do docker-compose.yml i dostosuj domene / certresolver / zmienne.
+# Wzorowane na wewnetrznym standardzie (Traefik + zewnetrzna siec traefik-net).
+#
+# Przydatne zmienne (mozna trzymac w pliku .env obok):
+#   MCP_DOMAIN=fakturaxl-mcp.twoja-domena.pl
+#   TRAEFIK_CERTRESOLVER=myresolver
+
+services:
+  fakturaxl-mcp:
+    build:
+      context: .
+      target: runtime
+    # Alternatywnie gotowy obraz z rejestru:
+    # image: rejestr.twoja-domena.pl/fakturaxl-mcp-server:latest
+    image: fakturaxl-mcp-server:latest
+    container_name: fakturaxl-mcp
+    restart: always
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - LOG_TO_FILE=false
+      - FAKTURAXL_BASE_URL=https://program.fakturaxl.pl/api
+      # Parametry warstwy praktycznej (opcjonalne):
+      - DEFAULT_LIST_LIMIT=50
+      - MAX_LIST_LIMIT=500
+      - MAX_RANGE_MONTHS=24
+      - CACHE_TTL_MS=300000
+      - PAGE_SIZE=500
+      - RATE_LIMIT_RETRIES=5
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.fakturaxl-mcp.rule=Host(`${MCP_DOMAIN}`)"
+      - "traefik.http.routers.fakturaxl-mcp.entrypoints=websecure"
+      - "traefik.http.routers.fakturaxl-mcp.tls.certresolver=${TRAEFIK_CERTRESOLVER}"
+      - "traefik.http.routers.fakturaxl-mcp.service=fakturaxl-mcp"
+      - "traefik.http.services.fakturaxl-mcp.loadbalancer.server.port=3000"
+    networks:
+      - traefik-net
+
+networks:
+  traefik-net:
+    external: true
