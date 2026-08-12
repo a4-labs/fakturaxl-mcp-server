@@ -157,6 +157,8 @@ src/
   fakturaxl/codes.ts       # mapa kodów zwracanych przez API
 docs/
   api-fakturaxl.md         # dokumentacja API FakturaXL
+.github/workflows/
+  ci-cd.yml                # build + push obrazu do GHCR i deploy przez SSH
 Dockerfile                 # multi-stage: build / runtime (prod) / dev
 docker-compose.dev.yml     # lokalny dev (hot-reload, bez Traefika)
 docker-compose.example.yml # szablon compose produkcyjnego (Traefik) do skopiowania
@@ -181,19 +183,18 @@ docker compose -f docker-compose.dev.yml up --build
 
 ### Serwer (produkcja, Traefik)
 
-Wymaga istniejącej zewnętrznej sieci `traefik-net`. Skopiuj szablon i ustaw domenę/certresolver przez zmienne:
+Wymaga istniejącej zewnętrznej sieci `traefik-net`. Na serwerze, w katalogu aplikacji
+(u nas `/home/user/myapps/fakturaxl-mcp-server/`), tworzymy `docker-compose.yml` na
+bazie szablonu i ustawiamy w nim domenę oraz certresolver:
 
 ```bash
 cp docker-compose.example.yml docker-compose.yml
-# w .env obok compose:
-#   MCP_DOMAIN=fakturaxl-mcp.twoja-domena.pl
-#   TRAEFIK_CERTRESOLVER=myresolver
 docker compose up -d
 ```
 
-Router nasłuchuje na `${MCP_DOMAIN}` (entrypoint `websecure`, TLS przez
-`${TRAEFIK_CERTRESOLVER:-myresolver}`), kierując ruch na port `3000` kontenera.
-W `mcp.json` klienta użyj wtedy `https://<MCP_DOMAIN>/mcp` z nagłówkiem
+Router nasłuchuje na wskazanej domenie (entrypoint `websecure`, TLS przez
+certresolver Traefika), kierując ruch na port `3000` kontenera.
+W `mcp.json` klienta użyj wtedy `https://<domena>/mcp` z nagłówkiem
 `Authorization: Bearer <klucz>`.
 
 ## Test lokalny (MCP Inspector)
@@ -205,13 +206,40 @@ npx @modelcontextprotocol/inspector
 W Inspectorze: transport **Streamable HTTP**, URL `http://localhost:3000/mcp`,
 nagłówek `Authorization: Bearer <klucz>`.
 
-## Wdrożenie produkcyjne (Linux)
+## Wdrożenie produkcyjne (CI/CD)
 
-Rekomendowana ścieżka to Docker + Traefik (sekcja „Docker" powyżej):
+Wdrożenie jest **automatyczne**: każdy push do `main` uruchamia
+`.github/workflows/ci-cd.yml`, który buduje obraz, wypycha go do GHCR i wchodzi na
+serwer przez SSH, żeby zrobić `docker compose pull && up -d`. Ręcznie można go odpalić
+przez `workflow_dispatch` (`gh workflow run "Build & Deploy"`).
 
-```bash
-MCP_DOMAIN=fakturaxl-mcp.twoja-domena.pl docker compose up -d --build
-```
+Jak to działa:
 
-Alternatywnie bez Dockera: `npm ci && npm run build && npm start` za reverse proxy
+1. **Build i push** — obraz `ghcr.io/socialbuzzstudio/fakturaxl-mcp-server` w tagach `latest`
+   i wersji z `package.json`. Build używa `target: runtime` — to obowiązkowe, bo ostatnim
+   etapem `Dockerfile` jest `dev` z hot-reloadem. Kompilacja TypeScript dzieje się w etapie
+   build, więc błąd typów zatrzymuje CI. Publikacja idzie wbudowanym `GITHUB_TOKEN`
+   (job ma `packages: write`) — żadnych własnych PAT-ów.
+2. **Deploy** — `appleboy/ssh-action` loguje się na serwer kluczem z sekretu, robi
+   `docker login ghcr.io` tokenem ważnym **tylko na czas tego przebiegu**, pobiera obraz,
+   restartuje kontener i się wylogowuje. Serwer nie przechowuje żadnych poświadczeń do rejestru.
+
+Paczka w GHCR jest **prywatna**, mimo że repozytorium jest publiczne — w GHCR widoczność
+paczki jest niezależna od widoczności repo i domyślnie ustawiona na prywatną. Paczka
+dziedziczy uprawnienia dostępu z repo, dzięki czemu job deployu ma do niej dostęp bez
+dodatkowej konfiguracji. Uwaga: zmiana paczki na publiczną jest **nieodwracalna**.
+
+Wymagane sekrety w repozytorium (ustawiane przez `gh secret set`, nie klikane w przeglądarce):
+
+| Sekret | Zawartość |
+| --- | --- |
+| `SSH_HOST` | IP serwera |
+| `SSH_USERNAME` | użytkownik SSH używany do deployu |
+| `SSH_PRIVATE_KEY` | klucz prywatny osobnej pary wygenerowanej tylko pod CI/CD |
+
+Klucz prywatny podaje się przez potok (`Get-Content -Raw ... | gh secret set ...`), a nie
+przez `--body` — musi wejść w całości, z liniami BEGIN/END, inaczej deploy padnie na
+„invalid format".
+
+Bez Dockera (wdrożenie ręczne): `npm ci && npm run build && npm start` za reverse proxy
 (nginx/Caddy/Traefik) z TLS, kierującym `/mcp` na port aplikacji.

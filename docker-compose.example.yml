@@ -8,12 +8,14 @@
 
 services:
   fakturaxl-mcp:
-    build:
-      context: .
-      target: runtime
-    # Alternatywnie gotowy obraz z rejestru:
-    # image: rejestr.twoja-domena.pl/fakturaxl-mcp-server:latest
-    image: fakturaxl-mcp-server:latest
+    # Obraz z GHCR, budowany i wypychany przez GitHub Actions.
+    # Nazwa organizacji i repo MALYMI literami. Paczka jest prywatna, wiec reczny
+    # pull wymaga `docker login ghcr.io` (CI loguje sie tokenem na czas przebiegu).
+    image: ghcr.io/<organizacja-github>/fakturaxl-mcp-server:latest
+    # Alternatywnie budowanie lokalnie zamiast pobierania obrazu:
+    # build:
+    #   context: .
+    #   target: runtime
     container_name: fakturaxl-mcp
     restart: always
     environment:

@@ -9,9 +9,7 @@ logs/
 # Docker - lokalne nadpisania (commitowane: compose dev + example)
 docker-compose.override.yml
 
-# Compose serwerowy - zawiera wewnetrzny rejestr i domene prod (repo jest publiczne)
+# Compose serwerowy - zawiera domene prod i sciezki serwera (repo jest publiczne).
+# Wzorzec do skopiowania: docker-compose.example.yml
 docker-compose.yml
-
-# Skrypt deploymentowy (lokalny, zawiera adresy serwera)
-buildandpush.ps1
 
