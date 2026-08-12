@@ -35,6 +35,15 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", name: "fakturaxl-mcp", mode: "read-only" });
 });
 
+/** Nazwa metody / narzedzia z body JSON-RPC - do korelacji logow zadania z wywolaniem narzedzia. */
+function describeRequest(body: unknown): { method?: string; tool?: string } {
+  const rpc = body as { method?: unknown; params?: { name?: unknown } } | undefined;
+  return {
+    method: typeof rpc?.method === "string" ? rpc.method : undefined,
+    tool: typeof rpc?.params?.name === "string" ? rpc.params.name : undefined,
+  };
+}
+
 app.post("/mcp", async (req: Request, res: Response) => {
   const apiToken = extractApiToken(req);
   if (!apiToken) {
@@ -42,10 +51,19 @@ app.post("/mcp", async (req: Request, res: Response) => {
     return unauthorized(res);
   }
 
+  const startedAt = Date.now();
+  const request = describeRequest(req.body);
+  logger.info("mcp.request", { ...request, token: maskSecret(apiToken) });
+
   const server = buildServer(apiToken);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
   res.on("close", () => {
+    // Klient rozlaczyl sie przed otrzymaniem calej odpowiedzi - to wlasnie tak
+    // objawia sie timeout po stronie agenta. Bez tego logu byl niewidoczny.
+    if (!res.writableEnded) {
+      logger.warn("mcp.client_disconnected", { ...request, durationMs: Date.now() - startedAt });
+    }
     void transport.close();
     void server.close();
   });
@@ -53,10 +71,10 @@ app.post("/mcp", async (req: Request, res: Response) => {
   try {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
-    logger.debug("mcp.request_handled", { token: maskSecret(apiToken) });
+    logger.info("mcp.request_handled", { ...request, durationMs: Date.now() - startedAt });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error("mcp.handler_error", { error: message });
+    logger.error("mcp.handler_error", { ...request, error: message, durationMs: Date.now() - startedAt });
     if (!res.headersSent) {
       res.status(500).json({
         jsonrpc: "2.0",

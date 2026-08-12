@@ -32,4 +32,9 @@ export const config = {
   pageSize: num(process.env.PAGE_SIZE, 500),
   // liczba prob przy kodzie 2 (rate limit) zanim zwrocimy blad
   rateLimitRetries: num(process.env.RATE_LIMIT_RETRIES, 5),
+  // budzet czasu na jedno wywolanie narzedzia; po jego wyczerpaniu zwracamy dane
+  // czesciowe + kursor. Musi byc wyrazne mniejszy od timeoutu klienta MCP (zwykle 60s).
+  toolBudgetMs: num(process.env.TOOL_BUDGET_MS, 40000),
+  // maks. dlugosc body request/response w logach (pelne body tylko przy bledzie)
+  logBodyMaxChars: num(process.env.LOG_BODY_MAX_CHARS, 2000),
 } as const;

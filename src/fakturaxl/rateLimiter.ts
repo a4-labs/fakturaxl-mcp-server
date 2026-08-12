@@ -5,6 +5,10 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /**
  * Minimalne odstepy miedzy wywolaniami per endpoint (z dokumentacji FakturaXL,
  * sekcja "Jak czesto mozna odpytac API"). Wartosci w ms.
+ *
+ * Zweryfikowane empirycznie na produkcyjnym API: odstep jest WYMUSZANY (kod 2)
+ * i dotyczy calego endpointu, nie pojedynczego zapytania - rozne zakresy dat
+ * wyslane szybciej niz co 5s tez dostaja kod 2. Nie da sie tego zrownoleglic.
  */
 const ENDPOINT_INTERVALS: Record<string, number> = {
   "lista_dokumentow.php": 5000,
@@ -14,26 +18,41 @@ const ENDPOINT_INTERVALS: Record<string, number> = {
 };
 const DEFAULT_INTERVAL = 1000;
 
+/** Po tym czasie bezczynnosci wpis kolejki jest usuwany (mapa nie rosnie bez konca). */
+const IDLE_TTL_MS = 10 * 60 * 1000;
+
 function intervalFor(endpoint: string): number {
   return ENDPOINT_INTERVALS[endpoint] ?? DEFAULT_INTERVAL;
 }
 
+type Queue = {
+  lastFinished: number;
+  tail: Promise<unknown>;
+  pending: number;
+};
+
 /**
- * Globalny (process-wide) limiter. Serializuje wywolania per endpoint i wymusza
- * minimalny odstep miedzy nimi. Dzieki temu agent nigdy nie musi sam obslugiwac
- * limitu "co N sekund" - my go respektujemy natywnie.
+ * Limiter serializuje wywolania i wymusza minimalny odstep w obrebie jednej kolejki.
+ *
+ * Kolejka jest per (token API + endpoint), bo limit FakturaXL obowiazuje per konto.
+ * Dzieki temu agent pracujacy na jednym koncie nie blokuje agentow na innych kontach
+ * - wczesniej jedna globalna kolejka powodowala, ze zapytanie o dwa lata dokumentow
+ * wstrzymywalo wszystkie inne wywolania w calym procesie.
  */
 class RateLimiter {
-  private lastFinished = new Map<string, number>();
-  private tail = new Map<string, Promise<unknown>>();
+  private queues = new Map<string, Queue>();
 
-  async run<T>(endpoint: string, fn: () => Promise<T>): Promise<T> {
+  async run<T>(scope: string, endpoint: string, fn: () => Promise<T>): Promise<T> {
     const interval = intervalFor(endpoint);
-    const prev = this.tail.get(endpoint) ?? Promise.resolve();
+    const key = `${scope}|${endpoint}`;
+    this.prune();
 
-    const task = prev.catch(() => {}).then(async () => {
-      const now = Date.now();
-      const wait = Math.max(0, (this.lastFinished.get(endpoint) ?? 0) + interval - now);
+    const queue = this.queues.get(key) ?? { lastFinished: 0, tail: Promise.resolve(), pending: 0 };
+    this.queues.set(key, queue);
+    queue.pending += 1;
+
+    const task = queue.tail.catch(() => {}).then(async () => {
+      const wait = Math.max(0, queue.lastFinished + interval - Date.now());
       if (wait > 0) {
         logger.debug("ratelimit.wait", { endpoint, waitMs: wait });
         await sleep(wait);
@@ -41,15 +60,30 @@ class RateLimiter {
       try {
         return await fn();
       } finally {
-        this.lastFinished.set(endpoint, Date.now());
+        queue.lastFinished = Date.now();
+        queue.pending -= 1;
       }
     });
 
-    this.tail.set(
-      endpoint,
-      task.catch(() => {}),
-    );
-    return task as Promise<T>;
+    queue.tail = task.catch(() => {});
+    return task;
+  }
+
+  /** Czas oczekiwania, ktory zaplaci NASTEPNE wywolanie - potrzebny do budzetu czasu narzedzia. */
+  nextWaitMs(scope: string, endpoint: string): number {
+    const queue = this.queues.get(`${scope}|${endpoint}`);
+    if (!queue) return 0;
+    const interval = intervalFor(endpoint);
+    return Math.max(0, queue.lastFinished + interval - Date.now()) + queue.pending * interval;
+  }
+
+  private prune(): void {
+    const now = Date.now();
+    for (const [key, queue] of this.queues) {
+      if (queue.pending === 0 && now - queue.lastFinished > IDLE_TTL_MS) {
+        this.queues.delete(key);
+      }
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import { XMLBuilder, XMLParser } from "fast-xml-parser";
+import { countApiCall } from "../callContext.js";
 import { config } from "../config.js";
-import { logger, maskSecret } from "../logger.js";
+import { logger, maskSecret, truncate } from "../logger.js";
 import { AUTH_ERROR_CODES, SUCCESS_READ_CODES, describeCode } from "./codes.js";
 import { rateLimiter, sleep, intervalFor } from "./rateLimiter.js";
 
@@ -51,13 +52,18 @@ function buildXml(params: Record<string, string | number>): string {
   return builder.build({ dokument: params });
 }
 
+/** Klucz kolejki limitera - limit FakturaXL obowiazuje per konto, wiec per token API. */
+function scopeOf(params: XmlParams): string {
+  return String(params.api_token ?? "anon");
+}
+
 /**
- * Publiczne API klienta: wywoluje endpoint FakturaXL przez globalny rate limiter
- * (odstepy per endpoint) z automatycznym retry na kod 2 (przekroczony limit zapytan).
- * Agent nigdy nie musi sam obslugiwac throttlingu.
+ * Publiczne API klienta: wywoluje endpoint FakturaXL przez rate limiter
+ * (odstepy per endpoint, kolejka per token) z automatycznym retry na kod 2
+ * (przekroczony limit zapytan). Agent nigdy nie musi sam obslugiwac throttlingu.
  */
 export async function fakturaXlCall(endpoint: string, params: XmlParams): Promise<unknown> {
-  return rateLimiter.run(endpoint, () => callWithRateLimitRetry(endpoint, params));
+  return rateLimiter.run(scopeOf(params), endpoint, () => callWithRateLimitRetry(endpoint, params));
 }
 
 async function callWithRateLimitRetry(endpoint: string, params: XmlParams): Promise<unknown> {
@@ -93,14 +99,16 @@ async function doCall(endpoint: string, params: XmlParams): Promise<unknown> {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
   };
 
+  countApiCall();
   logger.info("fakturaxl.request", {
     requestId,
     method: "POST",
     url,
     headers,
-    body: maskXml(xml),
+    body: truncate(maskXml(xml)),
   });
 
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.fakturaXlTimeoutMs);
 
@@ -119,7 +127,7 @@ async function doCall(endpoint: string, params: XmlParams): Promise<unknown> {
     responseText = await res.text();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error("fakturaxl.network_error", { requestId, url, error: message });
+    logger.error("fakturaxl.network_error", { requestId, url, error: message, durationMs: Date.now() - startedAt });
     throw new FakturaXlError(`Błąd połączenia z FakturaXL: ${message}`, undefined, "network");
   } finally {
     clearTimeout(timeout);
@@ -128,11 +136,13 @@ async function doCall(endpoint: string, params: XmlParams): Promise<unknown> {
   logger.info("fakturaxl.response", {
     requestId,
     status,
+    durationMs: Date.now() - startedAt,
     headers: responseHeaders,
-    body: responseText,
+    body: truncate(responseText),
   });
 
   if (status < 200 || status >= 300) {
+    logger.error("fakturaxl.http_error", { requestId, url, status, body: responseText });
     throw new FakturaXlError(`FakturaXL zwróciło HTTP ${status}`, undefined, "http");
   }
 
@@ -141,6 +151,7 @@ async function doCall(endpoint: string, params: XmlParams): Promise<unknown> {
     parsed = parser.parse(responseText);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    logger.error("fakturaxl.parse_error", { requestId, url, error: message, body: responseText });
     throw new FakturaXlError(`Nie udało się sparsować odpowiedzi XML: ${message}`, undefined, "api");
   }
 

@@ -29,6 +29,14 @@ services:
       - CACHE_TTL_MS=300000
       - PAGE_SIZE=500
       - RATE_LIMIT_RETRIES=5
+      - TOOL_BUDGET_MS=40000
+      - LOG_BODY_MAX_CHARS=2000
+    # Rotacja logow: bez tego json-file rosnie bez limitu (surowe body XML sa duze).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.fakturaxl-mcp.rule=Host(`${MCP_DOMAIN}`)"

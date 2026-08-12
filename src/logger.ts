@@ -34,6 +34,15 @@ export function maskDeep<T>(input: T): T {
   return input;
 }
 
+/**
+ * Skraca dlugie tresci (body XML) na potrzeby logow. Odpowiedzi FakturaXL siegaja
+ * setek KB, co przy braku obciecia zapycha logi Dockera i utrudnia ich czytanie.
+ */
+export function truncate(value: string, max: number = config.logBodyMaxChars): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}...[obcieto, lacznie ${value.length} znakow]`;
+}
+
 function shouldLog(level: LogLevel): boolean {
   return LEVELS[level] >= LEVELS[config.logLevel];
 }

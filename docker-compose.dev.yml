@@ -22,6 +22,13 @@ services:
       - CACHE_TTL_MS=300000
       - PAGE_SIZE=500
       - RATE_LIMIT_RETRIES=5
+      - TOOL_BUDGET_MS=40000
+      - LOG_BODY_MAX_CHARS=2000
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "3000:3000"
     volumes:
