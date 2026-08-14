@@ -31,14 +31,39 @@ export class FakturaXlError extends Error {
   }
 }
 
-export type XmlParams = Record<string, string | number | undefined | null>;
+/**
+ * Wartosc pola XML. Zagniezdzenia i tablice sa potrzebne dla zapisu
+ * (dokument_dodaj.php wymaga sekcji <nabywca> i powtarzanych <faktura_pozycje>);
+ * XMLBuilder serializuje tablice jako powtorzony tag o tej samej nazwie.
+ */
+export type XmlValue = string | number | undefined | null | XmlParams | XmlValue[];
+export type XmlParams = { [key: string]: XmlValue };
 
-/** Usuwa pola undefined/null - reszte serializujemy jako tagi XML. */
-function cleanParams(params: XmlParams): Record<string, string | number> {
-  const out: Record<string, string | number> = {};
+type CleanValue = string | number | CleanParams | CleanValue[];
+type CleanParams = { [key: string]: CleanValue };
+
+/** Usuwa pola undefined/null (rekurencyjnie) - reszte serializujemy jako tagi XML. */
+function cleanValue(value: XmlValue): CleanValue | undefined {
+  if (value === undefined || value === null) return undefined;
+
+  if (Array.isArray(value)) {
+    const items = value.map(cleanValue).filter((v): v is CleanValue => v !== undefined);
+    return items.length > 0 ? items : undefined;
+  }
+
+  if (typeof value === "object") {
+    const nested = cleanParams(value);
+    return Object.keys(nested).length > 0 ? nested : undefined;
+  }
+
+  return value;
+}
+
+function cleanParams(params: XmlParams): CleanParams {
+  const out: CleanParams = {};
   for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null) continue;
-    out[k] = v;
+    const cleaned = cleanValue(v);
+    if (cleaned !== undefined) out[k] = cleaned;
   }
   return out;
 }
@@ -48,7 +73,7 @@ function maskXml(xml: string): string {
   return xml.replace(/(<api_token>)(.*?)(<\/api_token>)/gs, (_m, a, token, b) => `${a}${maskSecret(token)}${b}`);
 }
 
-function buildXml(params: Record<string, string | number>): string {
+function buildXml(params: CleanParams): string {
   return builder.build({ dokument: params });
 }
 
@@ -161,18 +186,25 @@ async function doCall(endpoint: string, params: XmlParams): Promise<unknown> {
 
 /**
  * Wykrywa kod bledu w odpowiedzi <dokument><kod>N</kod></dokument>.
- * Kody sukcesu odczytu (1,5) oraz odpowiedzi listowe (<dokumenty>) przepuszczamy.
+ * Kody sukcesu (1,5) oraz odpowiedzi listowe (<dokumenty>) przepuszczamy.
+ *
+ * Walidacja zapisu zwraca WIELE tagow <kod> naraz - zweryfikowane sonda na
+ * dokument_dodaj.php, ktora dla niepelnego dokumentu odpowiedziala kodami
+ * 11, 13, 15 i 18. Parser daje wtedy tablice, wiec raportujemy wszystkie
+ * przyczyny, a nie tylko pierwsza - agent poprawia dokument w jednym kroku.
  */
 function assertNoErrorCode(parsed: unknown): void {
   const dokument = (parsed as { dokument?: { kod?: unknown; komunikat?: unknown } })?.dokument;
   const kodRaw = dokument?.kod;
   if (kodRaw === undefined || kodRaw === null) return;
 
-  const kod = String(kodRaw);
-  if (SUCCESS_READ_CODES.has(kod)) return;
+  const kody = (Array.isArray(kodRaw) ? kodRaw : [kodRaw]).map(String);
+  const errors = kody.filter((kod) => !SUCCESS_READ_CODES.has(kod));
+  if (errors.length === 0) return;
 
-  const opis = describeCode(kod) ?? "Nieznany kod odpowiedzi";
+  const opisy = errors.map((kod) => `${kod}: ${describeCode(kod) ?? "Nieznany kod odpowiedzi"}`).join("; ");
   const komunikat = dokument?.komunikat ? ` (${String(dokument.komunikat)})` : "";
-  const kind = AUTH_ERROR_CODES.has(kod) ? "auth" : "api";
-  throw new FakturaXlError(`FakturaXL kod ${kod}: ${opis}${komunikat}`, kod, kind);
+  const kind = errors.some((kod) => AUTH_ERROR_CODES.has(kod)) ? "auth" : "api";
+  const prefiks = errors.length > 1 ? "FakturaXL kody" : "FakturaXL kod";
+  throw new FakturaXlError(`${prefiks} ${opisy}${komunikat}`, errors[0], kind);
 }

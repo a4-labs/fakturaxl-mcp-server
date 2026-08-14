@@ -19,6 +19,13 @@ export const config = {
   logLevel: (process.env.LOG_LEVEL as LogLevel) ?? "info",
   logToFile: bool(process.env.LOG_TO_FILE, true),
 
+  // Narzedzia zapisu (wystawianie faktur) sa domyslnie WYLACZONE. Serwer bez tej
+  // flagi zachowuje sie dokladnie jak dotad, czyli read-only.
+  allowWrite: bool(process.env.ALLOW_WRITE, false),
+  // Waznosc tokenu podgladu z przygotuj_fakture; po tym czasie trzeba przygotowac
+  // dokument ponownie, zeby agent nie wystawil faktury na podstawie starych danych.
+  draftTtlMs: num(process.env.DRAFT_TTL_MS, 10 * 60 * 1000),
+
   // Warstwa praktyczna dla agenta:
   // domyslna liczba wierszy zwracanych z list (reszta dostepna przez has_more/limit)
   defaultListLimit: num(process.env.DEFAULT_LIST_LIMIT, 50),

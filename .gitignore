@@ -2,6 +2,7 @@ node_modules/
 dist/
 logs/
 *.log
+tmp/
 .env
 .env.local
 .DS_Store

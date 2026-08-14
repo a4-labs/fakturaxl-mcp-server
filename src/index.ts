@@ -32,7 +32,7 @@ const app = express();
 app.use(express.json({ limit: "4mb" }));
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", name: "fakturaxl-mcp", mode: "read-only" });
+  res.json({ status: "ok", name: "fakturaxl-mcp", mode: config.allowWrite ? "read-write" : "read-only" });
 });
 
 /** Nazwa metody / narzedzia z body JSON-RPC - do korelacji logow zadania z wywolaniem narzedzia. */

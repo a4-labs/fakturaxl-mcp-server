@@ -1,6 +1,6 @@
 {
   "name": "fakturaxl-mcp-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Zdalny, read-only serwer MCP dla API FakturaXL (Streamable HTTP)",
   "type": "module",
   "main": "dist/index.js",

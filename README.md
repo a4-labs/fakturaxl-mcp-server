@@ -1,7 +1,10 @@
 # FakturaXL MCP Server
 
-Zdalny, **read-only** serwer [MCP](https://modelcontextprotocol.io) dla API [FakturaXL](https://program.fakturaxl.pl).
+Zdalny serwer [MCP](https://modelcontextprotocol.io) dla API [FakturaXL](https://program.fakturaxl.pl).
 Wystawiany pod URL przez **Streamable HTTP** — klient MCP podaje adres serwera oraz klucz API FakturaXL w nagłówku `Authorization: Bearer`.
+
+Domyślnie serwer jest **read-only**. Wystawianie faktur włącza flaga `ALLOW_WRITE=true`
+(patrz „Zapis: wystawianie faktur”).
 
 ## Stack
 
@@ -37,6 +40,8 @@ Health check: `GET /health`.
 | `FAKTURAXL_TIMEOUT_MS` | `30000` | Timeout wywołań do FakturaXL |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `LOG_TO_FILE` | `true` | Zapis logów do `logs/fakturaxl-YYYY-MM-DD.log` |
+| `ALLOW_WRITE` | `false` | Rejestruje narzędzia zapisu (wystawianie faktur) |
+| `DRAFT_TTL_MS` | `600000` | Ważność tokenu podglądu z `przygotuj_fakture` |
 | `DEFAULT_LIST_LIMIT` | `50` | Domyślna liczba wierszy zwracanych z list |
 | `MAX_LIST_LIMIT` | `500` | Twardy górny limit zwracanych wierszy |
 | `MAX_RANGE_MONTHS` | `24` | Maks. zakres dat dla auto-chunkingu (potem przycięcie + ostrzeżenie) |
@@ -67,6 +72,7 @@ zapytaniami do produkcyjnego API, nie tylko odczytane z dokumentacji:
 | --- | --- |
 | Maks. zakres `data_od`..`data_do` | 32 dni przechodzi, 35 dni zwraca `kod 28`. Używamy okien 31-dniowych |
 | Odstęp między zapytaniami `lista_dokumentow.php` | Wymuszany: 3 s i 4 s → `kod 2`, 5 s → OK |
+| Odstęp dla `dokument_dodaj.php` | 2 s (z dokumentacji) — wpisany do rate limitera |
 | Zasięg odstępu | **Cały endpoint**, nie pojedyncze zapytanie — różne zakresy dat wysłane co 1 s też dostają `kod 2`. Okien **nie da się zrównoleglić** |
 | `data_aktualizacji_od` / `data_dodania_od` | Podlegają temu samemu limitowi 31 dni (`kod 28`) — nie są obejściem |
 | `na_stronie` | Maksymalnie 500; wysłanie 2000 zwraca `na_stronie: 500` |
@@ -88,7 +94,7 @@ Brak nagłówka → HTTP 401. Nieprawidłowy klucz → FakturaXL zwraca kod `3`,
 mapowany na czytelny błąd narzędzia. Serwer działa w trybie **stateless**
 (nowa instancja per request; klucz nie jest nigdzie przechowywany).
 
-## Dostępne narzędzia (tylko odczyt)
+## Dostępne narzędzia (odczyt)
 
 | Narzędzie | Opis |
 | --- | --- |
@@ -113,8 +119,48 @@ Agent musi wtedy wywołać narzędzie ponownie z tym samym zakresem i `kursor` r
 tej wartości, aż `ukonczono: true`, a wyniki scalić (sumy dodać). Przy `TOOL_BUDGET_MS=40000`
 jedno wywołanie obejmuje ~7 okien, czyli 2 lata to ~4 wywołania.
 
-Świadomie **pominięte** (bo zakres read-only): wystawianie faktur/korekt,
-wysyłka e-mail, KSeF, relacje, tagi, zmiana statusu.
+Świadomie **pominięte**: korekty, faktury zaliczkowe/końcowe, wysyłka e-mail, KSeF,
+relacje, tagi, zmiana statusu, usuwanie dokumentów.
+
+## Zapis: wystawianie faktur
+
+Włączane flagą `ALLOW_WRITE=true`. Bez niej narzędzia zapisu **nie są rejestrowane**,
+więc agent ich nie widzi — domyślne wdrożenie pozostaje read-only. `GET /health`
+raportuje tryb (`read-only` / `read-write`).
+
+Zakres: **Faktura VAT** (`typ_faktury=0`), przychodowa.
+
+| Narzędzie | Opis |
+| --- | --- |
+| `przygotuj_fakture` | Krok 1: waliduje dane, liczy kwoty, zwraca podgląd + `token_potwierdzenia`. **Nic nie wystawia.** |
+| `wystaw_fakture` | Krok 2: wystawia dokument przygotowany w kroku 1. Wymaga `token_potwierdzenia` i `potwierdzam: true`. |
+
+Dlaczego dwa kroki: wystawienie faktury jest nieodwracalne (zużywa numer z ciągłej
+numeracji), a MCP nie ma UI z przyciskiem potwierdzenia. Bariera siedzi więc
+w protokole — agent musi najpierw pokazać użytkownikowi podgląd z kwotami.
+
+Token daje przy okazji **idempotencję, której API FakturaXL nie ma**: klient MCP
+potrafi powtórzyć wywołanie po timeoucie, a zużyty draft zwraca pierwotny dokument
+zamiast wystawiać drugi. Drafty żyją w pamięci procesu (TTL `DRAFT_TTL_MS`),
+więc restart unieważnia te niepotwierdzone.
+
+Kwoty w podglądzie liczymy lokalnie w groszach (float gubi grosze na sumach
+pozycji), wyłącznie po to, żeby użytkownik zobaczył wartość **przed** wystawieniem.
+Ostateczne kwoty nalicza FakturaXL — w teście E2E obie liczby były identyczne
+(`230.00` / `52.90` / `282.90`).
+
+### Pułapki API przy zapisie (zweryfikowane sondą)
+
+| Ustalenie | Konsekwencja |
+| --- | --- |
+| Dokument bez kraju nabywcy, dat, waluty i rodzaju płatności zwraca kody **11, 13, 15, 18** | Wszystkie te pola mają wartości domyślne (dziś, `PLN`, `Przelew`, `PL`) |
+| Odpowiedź zawiera **wiele tagów `<kod>`** naraz | `assertNoErrorCode` raportuje wszystkie przyczyny, nie tylko pierwszą |
+| `<nabywca><klient_id>` **nie jest obsługiwane** na wejściu (kody 9 i 11) | Dane nabywcy trzeba przepisać z `znajdz_klienta` |
+| API samo dopasowuje klienta po NIP i wpisuje `klient_id` do dokumentu | Duplikaty klientów nie powstają |
+| `lista_klientow` zwraca `<kraj_id>`, a `dokument_dodaj` oczekuje `<kraj>` | Różne nazwy pól na wejściu i wyjściu |
+| Encja `&amp;` wraca jako `&` | CDATA jest zbędne, escapowanie `XMLBuilder` wystarcza |
+| Każda pozycja zakłada nowy produkt w katalogu (`produkt_id` w odczycie) | Wystawianie faktur zaśmieca listę produktów |
+| `cena_netto` + `rabat` liczy się zgodnie z dokumentacją | 2 × 100 netto − 10% = netto 180.00, VAT 41.40, brutto 221.40 |
 
 ## Logowanie
 
@@ -146,7 +192,11 @@ src/
   config.ts                # konfiguracja z .env
   logger.ts                # logger JSON + maskowanie sekretów + obcinanie body
   callContext.ts           # kontekst wywołania narzędzia (licznik zapytań do API, czas)
-  tools/register.ts        # rejestracja narzędzi read-only + logowanie wywołań
+  tools/runner.ts          # wspólny wrapper narzędzia (kontekst pomiarowy + logi)
+  tools/register.ts        # rejestracja narzędzi odczytu
+  tools/registerWrite.ts   # rejestracja narzędzi zapisu (tylko przy ALLOW_WRITE)
+  fakturaxl/invoice.ts     # schema faktury VAT, wyliczenia podglądu, mapowanie na XML
+  fakturaxl/drafts.ts      # drafty faktur (dwa kroki + idempotencja)
   fakturaxl/client.ts      # XML->POST->JSON, mapowanie błędów, rate limiter + retry
   fakturaxl/rateLimiter.ts # throttling per (token + endpoint) wg odstępów z dokumentacji
   fakturaxl/pagination.ts  # auto-paginacja (fetchAllPages)

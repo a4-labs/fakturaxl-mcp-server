@@ -11,6 +11,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * wyslane szybciej niz co 5s tez dostaja kod 2. Nie da sie tego zrownoleglic.
  */
 const ENDPOINT_INTERVALS: Record<string, number> = {
+  "dokument_dodaj.php": 2000,
   "lista_dokumentow.php": 5000,
   "lista_produktow.php": 10000,
   "lista_klientow.php": 10000,
