@@ -25,6 +25,12 @@ import { authorizationPage, expiredAuthorizationPage, type AuthorizationPage } f
 import { EncryptedAuthStore } from "./store.js";
 
 const SUPPORTED_SCOPE = "mcp:tools";
+const CHATGPT_REDIRECT_PREFIX = "/connector/oauth/";
+const TRUSTED_REMOTE_REDIRECT_URIS = new Set([
+  "https://chatgpt.com/connector_platform_oauth_redirect",
+  "https://claude.ai/api/mcp/auth_callback",
+  "https://claude.com/api/mcp/auth_callback",
+]);
 const completeAuthorizationSchema = z.object({
   pending_id: z.string().min(1).max(256),
   csrf_token: z.string().min(1).max(256),
@@ -85,6 +91,31 @@ function normalizeResource(url: URL): string {
   const normalized = new URL(url);
   normalized.hash = "";
   return normalized.href;
+}
+
+function isTrustedRemoteRedirectUri(uri: string): boolean {
+  if (TRUSTED_REMOTE_REDIRECT_URIS.has(uri)) return true;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return false;
+  }
+
+  if (
+    parsed.origin !== "https://chatgpt.com" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    !parsed.pathname.startsWith(CHATGPT_REDIRECT_PREFIX)
+  ) {
+    return false;
+  }
+
+  const callbackId = parsed.pathname.slice(CHATGPT_REDIRECT_PREFIX.length);
+  return callbackId.length > 0 && !callbackId.includes("/");
 }
 
 function sendPage(res: Response, status: number, page: AuthorizationPage): void {
@@ -283,10 +314,13 @@ export class FakturaXlOAuthProvider implements OAuthServerProvider {
     client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
   ): Promise<OAuthClientInformationFull> {
     if ((client.token_endpoint_auth_method ?? "client_secret_basic") !== "none") {
-      throw new InvalidClientMetadataError("Cursor Desktop musi być klientem publicznym bez client_secret.");
+      throw new InvalidClientMetadataError("Klient MCP musi być klientem publicznym bez client_secret.");
     }
-    if (client.redirect_uris.length === 0 || client.redirect_uris.some((uri) => !this.allowedRedirectUris.has(uri))) {
-      throw new InvalidClientMetadataError("Niedozwolony redirect_uri dla Cursor Desktop.");
+    if (
+      client.redirect_uris.length === 0 ||
+      client.redirect_uris.some((uri) => !this.allowedRedirectUris.has(uri) && !isTrustedRemoteRedirectUri(uri))
+    ) {
+      throw new InvalidClientMetadataError("Niedozwolony redirect_uri dla klienta MCP.");
     }
     if (client.grant_types?.some((grant) => !["authorization_code", "refresh_token"].includes(grant))) {
       throw new InvalidClientMetadataError("Obsługiwane granty: authorization_code i refresh_token.");

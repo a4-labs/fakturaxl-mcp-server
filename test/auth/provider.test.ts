@@ -13,6 +13,12 @@ import { EncryptedAuthStore } from "../../src/auth/store.js";
 const KEY = Buffer.alloc(32, 3);
 const REDIRECT_URI = "http://localhost:8787/callback";
 const RESOURCE = new URL("https://mcp.example.com/mcp");
+const TRUSTED_REMOTE_REDIRECT_URIS = [
+  "https://chatgpt.com/connector/oauth/01234567-89ab-cdef-0123-456789abcdef",
+  "https://chatgpt.com/connector_platform_oauth_redirect",
+  "https://claude.ai/api/mcp/auth_callback",
+  "https://claude.com/api/mcp/auth_callback",
+] as const;
 
 function responseDouble(): AuthorizationResponse & {
   body?: string;
@@ -79,15 +85,39 @@ describe("FakturaXlOAuthProvider", () => {
     return { client, provider, store, validateApiToken };
   }
 
-  it("registers only public Cursor clients with allowlisted redirects", async () => {
+  it("registers public Cursor, ChatGPT and Claude clients with trusted redirects", async () => {
     const { provider } = await fixture();
 
-    await expect(
-      provider.clientsStore.registerClient!({
-        redirect_uris: ["https://attacker.example/callback"],
-        token_endpoint_auth_method: "none",
-      }),
-    ).rejects.toThrow(/redirect_uri/i);
+    for (const redirectUri of TRUSTED_REMOTE_REDIRECT_URIS) {
+      await expect(
+        provider.clientsStore.registerClient!({
+          redirect_uris: [redirectUri],
+          token_endpoint_auth_method: "none",
+        }),
+      ).resolves.toMatchObject({ redirect_uris: [redirectUri] });
+    }
+  });
+
+  it("rejects untrusted redirects and confidential clients", async () => {
+    const { provider } = await fixture();
+    const untrustedRedirectUris = [
+      "https://attacker.example/callback",
+      "https://chatgpt.com.evil.example/connector/oauth/callback-id",
+      "https://chatgpt.com/connector/oauth/",
+      "https://chatgpt.com/connector/oauth/callback-id/extra",
+      "https://chatgpt.com/connector/oauth/callback-id?next=https://attacker.example",
+      "https://claude.ai.evil.example/api/mcp/auth_callback",
+      "https://claude.ai/api/mcp/auth_callback/extra",
+    ];
+
+    for (const redirectUri of untrustedRedirectUris) {
+      await expect(
+        provider.clientsStore.registerClient!({
+          redirect_uris: [redirectUri],
+          token_endpoint_auth_method: "none",
+        }),
+      ).rejects.toThrow(/redirect_uri/i);
+    }
     await expect(
       provider.clientsStore.registerClient!({
         redirect_uris: [REDIRECT_URI],

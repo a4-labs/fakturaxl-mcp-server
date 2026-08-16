@@ -2,7 +2,7 @@
 
 Zdalny serwer [MCP](https://modelcontextprotocol.io) dla API [FakturaXL](https://program.fakturaxl.pl),
 wystawiany pod URL przez **Streamable HTTP**. Obsługuje legacy Bearer z kluczem FakturaXL
-oraz opcjonalny OAuth 2.1 dla Cursor Desktop.
+oraz opcjonalny OAuth 2.1 dla Cursor Desktop, ChatGPT i Claude.
 
 Domyślnie serwer jest **read-only**. Wystawianie faktur włącza flaga `ALLOW_WRITE=true`
 (patrz „Zapis: wystawianie faktur”).
@@ -46,7 +46,7 @@ Health check: `GET /health`.
 | `PUBLIC_BASE_URL` | — | Publiczny origin serwera OAuth, np. `https://mcp.example.pl`; wymagany przy OAuth |
 | `OAUTH_STORE_PATH` | `./data/oauth-store.json` | Szyfrowany magazyn klientów, grantów i kluczy FakturaXL |
 | `OAUTH_STORE_KEY` | — | 32 bajty base64 do AES-256-GCM; wymagane przy OAuth |
-| `OAUTH_ALLOWED_REDIRECT_URIS` | callbacki Cursor | Lista callbacków DCR rozdzielona przecinkami |
+| `OAUTH_ALLOWED_REDIRECT_URIS` | callbacki Cursor | Lista dodatkowych dokładnych callbacków DCR; zaufane callbacki ChatGPT i Claude są wbudowane |
 | `OAUTH_PENDING_TTL_MS` | `600000` | Ważność rozpoczętego formularza OAuth |
 | `OAUTH_CODE_TTL_MS` | `300000` | Ważność jednorazowego kodu OAuth |
 | `OAUTH_ACCESS_TTL_MS` | `0` | Ważność access tokenu; `0` oznacza bezterminowo |
@@ -109,15 +109,22 @@ Authorization: Bearer <TWOJ_KLUCZ_API_FAKTURAXL>
 Ta metoda działa zawsze, również po włączeniu OAuth. Klucz nie jest wtedy zapisywany
 przez serwer. Nieprawidłowy klucz daje błąd auth z API FakturaXL.
 
-### OAuth 2.1 dla Cursor Desktop
+### OAuth 2.1 dla Cursor Desktop, ChatGPT i Claude
 
-OAuth jest domyślnie wyłączony. Po włączeniu Cursor wykonuje discovery, Dynamic Client
-Registration i PKCE S256, po czym otwiera formularz w przeglądarce. Użytkownik podaje
-klucz FakturaXL, serwer sprawdza go odczytowym `dokument_lista_dzialow.php`, szyfruje
-i zapisuje grant. Cursor otrzymuje opaque access token; ten token nigdy nie jest
-przekazywany do FakturaXL.
+OAuth jest domyślnie wyłączony. Po włączeniu klient MCP wykonuje discovery, Dynamic
+Client Registration i PKCE S256, po czym otwiera formularz w przeglądarce. Użytkownik
+podaje klucz FakturaXL, serwer sprawdza go odczytowym `dokument_lista_dzialow.php`,
+szyfruje i zapisuje grant. Klient otrzymuje opaque access token; ten token nigdy nie
+jest przekazywany do FakturaXL.
 
-Konfiguracja klienta nie zawiera sekretu:
+Provider akceptuje dokładne callbacki skonfigurowane w `OAUTH_ALLOWED_REDIRECT_URIS`
+oraz oficjalne callbacki zdalnych konektorów:
+
+- ChatGPT: `https://chatgpt.com/connector/oauth/{callback_id}` z jednym niepustym segmentem identyfikatora
+  oraz starszy `https://chatgpt.com/connector_platform_oauth_redirect`;
+- Claude: `https://claude.ai/api/mcp/auth_callback` i `https://claude.com/api/mcp/auth_callback`.
+
+Przykładowa konfiguracja Cursor nie zawiera sekretu:
 
 ```json
 {
@@ -355,7 +362,8 @@ nagłówek `Authorization: Bearer <klucz>`.
 Test OAuth w Cursor Desktop: włącz OAuth z `PUBLIC_BASE_URL=http://localhost:3000`,
 zostaw w konfiguracji MCP wyłącznie `url`, uruchom ponownie Cursor i wybierz połączenie.
 Przeglądarka powinna otworzyć formularz, a callback wrócić na
-`http://localhost:8787/callback`.
+`http://localhost:8787/callback`. W ChatGPT i Claude dodaj zdalny konektor wskazujący
+na publiczny URL `/mcp`; ich callbacki są rozpoznawane automatycznie.
 
 ## Wdrożenie produkcyjne (CI/CD)
 

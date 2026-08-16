@@ -12,6 +12,12 @@ import { createOAuthRuntime } from "../../src/auth/runtime.js";
 const REDIRECT_URI = "http://localhost:8787/callback";
 const PUBLIC_BASE_URL = new URL("https://mcp.example.test");
 const RESOURCE_URL = new URL("https://mcp.example.test/mcp");
+const REMOTE_CLIENT_REDIRECT_URIS = [
+  "https://chatgpt.com/connector/oauth/01234567-89ab-cdef-0123-456789abcdef",
+  "https://chatgpt.com/connector_platform_oauth_redirect",
+  "https://claude.ai/api/mcp/auth_callback",
+  "https://claude.com/api/mcp/auth_callback",
+] as const;
 
 function hiddenValue(html: string, name: string): string {
   const match = new RegExp(`name="${name}" value="([^"]+)"`).exec(html);
@@ -87,6 +93,22 @@ describe("OAuth HTTP flow", () => {
       authorization_servers: [PUBLIC_BASE_URL.href],
       scopes_supported: ["mcp:tools"],
     });
+  });
+
+  it.each(REMOTE_CLIENT_REDIRECT_URIS)("accepts DCR over HTTP for %s", async (redirectUri) => {
+    const registration = await fetch(`${baseUrl}/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      }),
+    });
+
+    expect(registration.status).toBe(201);
+    await expect(registration.json()).resolves.toMatchObject({ redirect_uris: [redirectUri] });
   });
 
   it("completes DCR, PKCE authorization and token exchange", async () => {
