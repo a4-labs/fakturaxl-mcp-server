@@ -25,6 +25,7 @@ import { authorizationPage, expiredAuthorizationPage, type AuthorizationPage } f
 import { EncryptedAuthStore } from "./store.js";
 
 const SUPPORTED_SCOPE = "mcp:tools";
+const SUPPORTED_CLIENT_AUTH_METHODS = ["none", "client_secret_post"] as const;
 const CHATGPT_REDIRECT_PREFIX = "/connector/oauth/";
 const TRUSTED_REMOTE_REDIRECT_URIS = new Set([
   "https://chatgpt.com/connector_platform_oauth_redirect",
@@ -322,8 +323,13 @@ export class FakturaXlOAuthProvider implements OAuthServerProvider {
   private async registerClient(
     client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
   ): Promise<OAuthClientInformationFull> {
-    if ((client.token_endpoint_auth_method ?? "client_secret_basic") !== "none") {
-      throw new InvalidClientMetadataError("Klient MCP musi być klientem publicznym bez client_secret.");
+    const tokenEndpointAuthMethod = client.token_endpoint_auth_method ?? "client_secret_post";
+    if (!SUPPORTED_CLIENT_AUTH_METHODS.some((method) => method === tokenEndpointAuthMethod)) {
+      throw new InvalidClientMetadataError("Obsługiwane metody uwierzytelnienia klienta: none i client_secret_post.");
+    }
+    const isPublicClient = tokenEndpointAuthMethod === "none";
+    if (!isPublicClient && !client.client_secret) {
+      throw new InvalidClientMetadataError("Poufny klient MCP wymaga client_secret.");
     }
     if (
       client.redirect_uris.length === 0 ||
@@ -340,10 +346,11 @@ export class FakturaXlOAuthProvider implements OAuthServerProvider {
 
     const registered = OAuthClientInformationFullSchema.parse({
       ...client,
+      token_endpoint_auth_method: tokenEndpointAuthMethod,
       client_id: randomUUID(),
       client_id_issued_at: Math.floor(Date.now() / 1000),
-      client_secret: undefined,
-      client_secret_expires_at: undefined,
+      client_secret: isPublicClient ? undefined : client.client_secret,
+      client_secret_expires_at: isPublicClient ? undefined : client.client_secret_expires_at,
     });
     await this.store.saveClient(registered);
     return registered;

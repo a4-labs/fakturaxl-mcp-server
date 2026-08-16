@@ -111,6 +111,77 @@ describe("OAuth HTTP flow", () => {
     await expect(registration.json()).resolves.toMatchObject({ redirect_uris: [redirectUri] });
   });
 
+  it("completes Claude DCR when token_endpoint_auth_method is omitted", async () => {
+    const redirectUri = "https://claude.ai/api/mcp/auth_callback";
+    const registration = await fetch(`${baseUrl}/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        redirect_uris: [redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        client_name: "Claude",
+      }),
+    });
+
+    expect(registration.status).toBe(201);
+    const client = (await registration.json()) as {
+      client_id: string;
+      client_secret: string;
+      token_endpoint_auth_method: string;
+    };
+    expect(client).toMatchObject({ token_endpoint_auth_method: "client_secret_post" });
+    expect(client.client_secret).toBeTruthy();
+
+    const verifier = "claude-pkce-verifier-with-more-than-forty-three-characters";
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const authorizeUrl = new URL(`${baseUrl}/authorize`);
+    authorizeUrl.search = new URLSearchParams({
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      scope: "mcp:tools",
+      resource: RESOURCE_URL.href,
+    }).toString();
+    const authorization = await fetch(authorizeUrl);
+    expect(authorization.status).toBe(200);
+    const html = await authorization.text();
+
+    const completion = await fetch(`${baseUrl}/oauth/authorize/complete`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        pending_id: hiddenValue(html, "pending_id"),
+        csrf_token: hiddenValue(html, "csrf_token"),
+        api_key: "valid-fakturaxl-key",
+      }),
+    });
+    expect(completion.status).toBe(302);
+    const code = new URL(completion.headers.get("location")!).searchParams.get("code")!;
+
+    const token = await fetch(`${baseUrl}/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: client.client_id,
+        client_secret: client.client_secret,
+        code,
+        code_verifier: verifier,
+        redirect_uri: redirectUri,
+        resource: RESOURCE_URL.href,
+      }),
+    });
+    expect(token.status).toBe(200);
+    await expect(token.json()).resolves.toMatchObject({
+      token_type: "Bearer",
+      scope: "mcp:tools",
+    });
+  });
+
   it("completes DCR, PKCE authorization and token exchange", async () => {
     const registration = await fetch(`${baseUrl}/register`, {
       method: "POST",

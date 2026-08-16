@@ -98,7 +98,7 @@ describe("FakturaXlOAuthProvider", () => {
     }
   });
 
-  it("rejects untrusted redirects and confidential clients", async () => {
+  it("rejects untrusted redirects and unsupported client authentication", async () => {
     const { provider } = await fixture();
     const untrustedRedirectUris = [
       "https://attacker.example/callback",
@@ -123,7 +123,13 @@ describe("FakturaXlOAuthProvider", () => {
         redirect_uris: [REDIRECT_URI],
         token_endpoint_auth_method: "client_secret_basic",
       }),
-    ).rejects.toThrow(/publiczn/i);
+    ).rejects.toThrow(/metody uwierzytelnienia/i);
+    await expect(
+      provider.clientsStore.registerClient!({
+        redirect_uris: [REDIRECT_URI],
+        token_endpoint_auth_method: "client_secret_post",
+      }),
+    ).rejects.toThrow(/client_secret/i);
   });
 
   it("allows the trusted OAuth callback origin in the form CSP", async () => {
