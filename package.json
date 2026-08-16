@@ -1,14 +1,15 @@
 {
   "name": "fakturaxl-mcp-server",
-  "version": "1.1.0",
-  "description": "Zdalny, read-only serwer MCP dla API FakturaXL (Streamable HTTP)",
+  "version": "1.2.0",
+  "description": "Zdalny serwer MCP dla API FakturaXL z dual auth (Streamable HTTP)",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   },
   "engines": {
     "node": ">=20"
@@ -26,6 +27,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.1.1",
     "tsx": "^4.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

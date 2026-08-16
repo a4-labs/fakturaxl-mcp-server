@@ -16,8 +16,10 @@ ENV NODE_ENV=production \
     PORT=3000 \
     LOG_TO_FILE=false
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-COPY --from=build /app/dist ./dist
+RUN npm ci --omit=dev && npm cache clean --force \
+    && mkdir -p /app/data \
+    && chown node:node /app/data
+COPY --from=build --chown=node:node /app/dist ./dist
 # Uruchamiamy jako uzytkownik nieuprzywilejowany (obraz node ma usera "node")
 USER node
 EXPOSE 3000
@@ -33,6 +35,8 @@ ENV NODE_ENV=development \
     PORT=3000
 COPY package*.json ./
 RUN npm ci
-COPY . .
+COPY --chown=node:node . .
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
 EXPOSE 3000
 CMD ["npm", "run", "dev"]

@@ -1,7 +1,8 @@
 # FakturaXL MCP Server
 
-Zdalny serwer [MCP](https://modelcontextprotocol.io) dla API [FakturaXL](https://program.fakturaxl.pl).
-Wystawiany pod URL przez **Streamable HTTP** — klient MCP podaje adres serwera oraz klucz API FakturaXL w nagłówku `Authorization: Bearer`.
+Zdalny serwer [MCP](https://modelcontextprotocol.io) dla API [FakturaXL](https://program.fakturaxl.pl),
+wystawiany pod URL przez **Streamable HTTP**. Obsługuje legacy Bearer z kluczem FakturaXL
+oraz opcjonalny OAuth 2.1 dla Cursor Desktop.
 
 Domyślnie serwer jest **read-only**. Wystawianie faktur włącza flaga `ALLOW_WRITE=true`
 (patrz „Zapis: wystawianie faktur”).
@@ -40,6 +41,18 @@ Health check: `GET /health`.
 | `FAKTURAXL_TIMEOUT_MS` | `30000` | Timeout wywołań do FakturaXL |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `LOG_TO_FILE` | `true` | Zapis logów do `logs/fakturaxl-YYYY-MM-DD.log` |
+| `TRUST_PROXY_HOPS` | `0` | Liczba zaufanych proxy; za pojedynczym Traefikiem ustaw `1` |
+| `OAUTH_ENABLED` | `false` | Włącza OAuth 2.1 obok legacy Bearer |
+| `PUBLIC_BASE_URL` | — | Publiczny origin serwera OAuth, np. `https://mcp.example.pl`; wymagany przy OAuth |
+| `OAUTH_STORE_PATH` | `./data/oauth-store.json` | Szyfrowany magazyn klientów, grantów i kluczy FakturaXL |
+| `OAUTH_STORE_KEY` | — | 32 bajty base64 do AES-256-GCM; wymagane przy OAuth |
+| `OAUTH_ALLOWED_REDIRECT_URIS` | callbacki Cursor | Lista callbacków DCR rozdzielona przecinkami |
+| `OAUTH_PENDING_TTL_MS` | `600000` | Ważność rozpoczętego formularza OAuth |
+| `OAUTH_CODE_TTL_MS` | `300000` | Ważność jednorazowego kodu OAuth |
+| `OAUTH_ACCESS_TTL_MS` | `0` | Ważność access tokenu; `0` oznacza bezterminowo |
+| `OAUTH_REFRESH_TTL_MS` | `0` | Ważność rotowanego refresh tokenu; `0` oznacza bezterminowo |
+| `OAUTH_AUTHORIZATION_ATTEMPTS` | `10` | Limit prób formularza per IP i okno |
+| `OAUTH_AUTHORIZATION_ATTEMPT_WINDOW_MS` | `900000` | Okno limitu prób formularza |
 | `ALLOW_WRITE` | `false` | Rejestruje narzędzia zapisu (wystawianie faktur) |
 | `DRAFT_TTL_MS` | `600000` | Ważność tokenu podglądu z `przygotuj_fakture` |
 | `DEFAULT_LIST_LIMIT` | `50` | Domyślna liczba wierszy zwracanych z list |
@@ -83,16 +96,75 @@ Dlatego narzędzia dokumentów zwracają kursor zamiast wisieć do timeoutu klie
 
 ## Autoryzacja
 
-Jeden sekret: **klucz API FakturaXL = token Bearer**.
-Klient MCP wysyła w każdym żądaniu nagłówek:
+Serwer obsługuje dwie zgodne wstecznie metody.
 
-```
+### Legacy Bearer
+
+Klient wysyła klucz FakturaXL bezpośrednio w każdym żądaniu:
+
+```http
 Authorization: Bearer <TWOJ_KLUCZ_API_FAKTURAXL>
 ```
 
-Brak nagłówka → HTTP 401. Nieprawidłowy klucz → FakturaXL zwraca kod `3`,
-mapowany na czytelny błąd narzędzia. Serwer działa w trybie **stateless**
-(nowa instancja per request; klucz nie jest nigdzie przechowywany).
+Ta metoda działa zawsze, również po włączeniu OAuth. Klucz nie jest wtedy zapisywany
+przez serwer. Nieprawidłowy klucz daje błąd auth z API FakturaXL.
+
+### OAuth 2.1 dla Cursor Desktop
+
+OAuth jest domyślnie wyłączony. Po włączeniu Cursor wykonuje discovery, Dynamic Client
+Registration i PKCE S256, po czym otwiera formularz w przeglądarce. Użytkownik podaje
+klucz FakturaXL, serwer sprawdza go odczytowym `dokument_lista_dzialow.php`, szyfruje
+i zapisuje grant. Cursor otrzymuje opaque access token; ten token nigdy nie jest
+przekazywany do FakturaXL.
+
+Konfiguracja klienta nie zawiera sekretu:
+
+```json
+{
+  "mcpServers": {
+    "fakturaxl": {
+      "url": "https://mcp.example.pl/mcp"
+    }
+  }
+}
+```
+
+Endpointy discovery i protokołu:
+
+- `/.well-known/oauth-authorization-server`
+- `/.well-known/oauth-protected-resource/mcp`
+- `/register`, `/authorize`, `/token`, `/revoke`
+- `/oauth/authorize/complete` — obsługa formularza, nie endpoint publicznego API
+
+#### Uruchomienie OAuth
+
+Wygeneruj jeden trwały klucz szyfrujący. Jego zmiana uniemożliwi odszyfrowanie
+istniejącego magazynu:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+Ustaw:
+
+```dotenv
+OAUTH_ENABLED=true
+PUBLIC_BASE_URL=https://mcp.example.pl
+OAUTH_STORE_KEY=<WYNIK_POLECENIA>
+```
+
+`PUBLIC_BASE_URL` musi być originem bez ścieżki. Produkcja wymaga HTTPS; HTTP jest
+akceptowane wyłącznie dla localhost. Access i refresh token są domyślnie bezterminowe;
+refresh token nadal jest rotowany przy każdym odświeżeniu. Skradziony token pozostaje
+ważny do wywołania `/revoke` albo usunięcia grantu, dlatego krótsze TTL są bezpieczniejszą
+opcją dla publicznych wdrożeń.
+
+Magazyn `oauth-store.json` jest w całości szyfrowany AES-256-GCM. Kody i tokeny są
+dodatkowo zapisywane tylko jako SHA-256. Zapis używa pliku tymczasowego, `fsync`
+i atomowego `rename`; zły klucz szyfrujący lub uszkodzony plik zatrzymuje start.
+
+Implementacja plikowa obsługuje wielu użytkowników, ale zakłada **jeden kontener**.
+Nie skaluj tej wersji poziomo — wiele replik wymaga wspólnego magazynu transakcyjnego.
 
 ## Dostępne narzędzia (odczyt)
 
@@ -187,11 +259,19 @@ rotację logów Dockera (`max-size: 10m`, `max-file: 3`).
 
 ```
 src/
-  index.ts                 # Express + Streamable HTTP + Bearer auth + logi żądań/rozłączeń
+  index.ts                 # inicjalizacja OAuth i start procesu HTTP
+  app.ts                   # Express + Streamable HTTP + dual auth + logi żądań/rozłączeń
   server.ts                # buildServer(apiToken) - instancja McpServer per request
   config.ts                # konfiguracja z .env
   logger.ts                # logger JSON + maskowanie sekretów + obcinanie body
   callContext.ts           # kontekst wywołania narzędzia (licznik zapytań do API, czas)
+  auth/
+    runtime.ts             # router OAuth SDK, metadata i trwały runtime
+    provider.ts            # DCR, authorize, token, refresh, revoke i formularz
+    store.ts               # szyfrowany, atomowy magazyn JSON
+    resolveCredential.ts   # OAuth access token lub legacy klucz FakturaXL
+    validateApiToken.ts    # odczytowa walidacja klucza przed wydaniem grantu
+    ui.ts                  # responsywny formularz autoryzacji
   tools/runner.ts          # wspólny wrapper narzędzia (kontekst pomiarowy + logi)
   tools/register.ts        # rejestracja narzędzi odczytu
   tools/registerWrite.ts   # rejestracja narzędzi zapisu (tylko przy ALLOW_WRITE)
@@ -207,6 +287,9 @@ src/
   fakturaxl/codes.ts       # mapa kodów zwracanych przez API
 docs/
   api-fakturaxl.md         # dokumentacja API FakturaXL
+  diagram.md               # architektura dual auth i przepływ sekretów
+  etap 1/backlog.md        # wykonanie wystawiania faktur
+  etap 2/backlog.md        # wykonanie OAuth 2.1
 .github/workflows/
   ci-cd.yml                # build + push obrazu do GHCR i deploy przez SSH
 Dockerfile                 # multi-stage: build / runtime (prod) / dev
@@ -216,36 +299,49 @@ docker-compose.example.yml # szablon compose produkcyjnego (Traefik) do skopiowa
 
 ## Docker
 
-Serwer jest **bezstanowy i nie przechowuje sekretów** — klucz API FakturaXL podaje
-klient MCP per request (Bearer). Dlatego obrazy/compose nie zawierają danych wrażliwych.
+Legacy Bearer pozostaje bezstanowy. Po włączeniu OAuth stan trafia do
+`./data/oauth-store.json`, montowanego jako `/app/data/oauth-store.json`.
+Katalog nie trafia do obrazu ani repozytorium.
 
 Pliki:
 - `Dockerfile` — multi-stage (`build` → `runtime` produkcyjny, oraz `dev` z hot-reload). Obraz produkcyjny na `node:22-alpine`, uruchamiany jako user `node`, z healthcheckiem `/health`.
-- `docker-compose.dev.yml` — lokalny development (tsx watch, port `3000:3000`, bez Traefika).
-- `docker-compose.example.yml` — szablon produkcyjny za Traefikiem (TLS, zewnętrzna sieć `traefik-net`) do skopiowania i dostosowania (`MCP_DOMAIN`, `TRAEFIK_CERTRESOLVER`).
+- `docker-compose.dev.yml` — lokalny development, port `3000:3000` i bind mount `./data`.
+- `docker-compose.example.yml` — produkcja za Traefikiem z TLS i bind mount `./data`.
 
 ### Dev (lokalnie)
 
 ```bash
+mkdir data
 docker compose -f docker-compose.dev.yml up --build
 # MCP: http://localhost:3000/mcp   health: http://localhost:3000/health
 ```
+
+Na Windowsie uprawnienia bind mountu obsługuje Docker Desktop. Na natywnym Linuksie
+katalog musi należeć do UID/GID `1000`, bo proces działa jako user `node`.
 
 ### Serwer (produkcja, Traefik)
 
 Wymaga istniejącej zewnętrznej sieci `traefik-net`. Na serwerze, w katalogu aplikacji
 (u nas `/home/user/myapps/fakturaxl-mcp-server/`), tworzymy `docker-compose.yml` na
-bazie szablonu i ustawiamy w nim domenę oraz certresolver:
+bazie szablonu, przygotowujemy katalog danych i ustawiamy `.env`:
 
 ```bash
 cp docker-compose.example.yml docker-compose.yml
+mkdir -p data
+sudo chown 1000:1000 data
+chmod 700 data
+# .env: MCP_DOMAIN, TRAEFIK_CERTRESOLVER, OAUTH_ENABLED i OAUTH_STORE_KEY
 docker compose up -d
 ```
 
+Plik jest tworzony z trybem `600`. Backupuj `data/oauth-store.json` razem z bezpiecznie
+przechowywanym `OAUTH_STORE_KEY`; sam plik bez klucza jest nieczytelny. Nie używaj
+`docker compose down -v` jako procedury sprzątania danych i nie uruchamiaj drugiej repliki.
+
 Router nasłuchuje na wskazanej domenie (entrypoint `websecure`, TLS przez
 certresolver Traefika), kierując ruch na port `3000` kontenera.
-W `mcp.json` klienta użyj wtedy `https://<domena>/mcp` z nagłówkiem
-`Authorization: Bearer <klucz>`.
+W `mcp.json` użyj samego URL dla OAuth albo dodaj nagłówek
+`Authorization: Bearer <klucz>` dla trybu legacy.
 
 ## Test lokalny (MCP Inspector)
 
@@ -255,6 +351,11 @@ npx @modelcontextprotocol/inspector
 
 W Inspectorze: transport **Streamable HTTP**, URL `http://localhost:3000/mcp`,
 nagłówek `Authorization: Bearer <klucz>`.
+
+Test OAuth w Cursor Desktop: włącz OAuth z `PUBLIC_BASE_URL=http://localhost:3000`,
+zostaw w konfiguracji MCP wyłącznie `url`, uruchom ponownie Cursor i wybierz połączenie.
+Przeglądarka powinna otworzyć formularz, a callback wrócić na
+`http://localhost:8787/callback`.
 
 ## Wdrożenie produkcyjne (CI/CD)
 

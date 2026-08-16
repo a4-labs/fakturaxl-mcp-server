@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { join } from "node:path";
 
 function num(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -10,6 +11,14 @@ function bool(value: string | undefined, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
+function list(value: string | undefined, fallback: string[]): string[] {
+  if (!value) return fallback;
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export const config = {
@@ -18,6 +27,23 @@ export const config = {
   fakturaXlTimeoutMs: num(process.env.FAKTURAXL_TIMEOUT_MS, 30000),
   logLevel: (process.env.LOG_LEVEL as LogLevel) ?? "info",
   logToFile: bool(process.env.LOG_TO_FILE, true),
+  trustProxyHops: num(process.env.TRUST_PROXY_HOPS, 0),
+
+  oauthEnabled: bool(process.env.OAUTH_ENABLED, false),
+  publicBaseUrl: process.env.PUBLIC_BASE_URL,
+  oauthStorePath: process.env.OAUTH_STORE_PATH ?? join(process.cwd(), "data", "oauth-store.json"),
+  oauthStoreKey: process.env.OAUTH_STORE_KEY,
+  oauthPendingTtlMs: num(process.env.OAUTH_PENDING_TTL_MS, 10 * 60 * 1000),
+  oauthAuthorizationCodeTtlMs: num(process.env.OAUTH_CODE_TTL_MS, 5 * 60 * 1000),
+  oauthAccessTokenTtlMs: num(process.env.OAUTH_ACCESS_TTL_MS, 0),
+  oauthRefreshTokenTtlMs: num(process.env.OAUTH_REFRESH_TTL_MS, 0),
+  oauthAuthorizationAttempts: num(process.env.OAUTH_AUTHORIZATION_ATTEMPTS, 10),
+  oauthAuthorizationAttemptWindowMs: num(process.env.OAUTH_AUTHORIZATION_ATTEMPT_WINDOW_MS, 15 * 60 * 1000),
+  oauthAllowedRedirectUris: list(process.env.OAUTH_ALLOWED_REDIRECT_URIS, [
+    "http://localhost:8787/callback",
+    "cursor://anysphere.cursor-mcp/oauth/callback",
+    "https://www.cursor.com/agents/mcp/oauth/callback",
+  ]),
 
   // Narzedzia zapisu (wystawianie faktur) sa domyslnie WYLACZONE. Serwer bez tej
   // flagi zachowuje sie dokladnie jak dotad, czyli read-only.

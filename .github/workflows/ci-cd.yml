@@ -22,6 +22,18 @@ jobs:
         id: version
         run: echo "VERSION=$(node -p 'require("./package.json").version')" >> $GITHUB_OUTPUT
 
+      - name: Konfiguracja Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Testy i kontrola typów
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+
       # Domyslny sterownik `docker` nie umie eksportowac cache - potrzebny docker-container.
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3

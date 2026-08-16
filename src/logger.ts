@@ -16,14 +16,19 @@ export function maskSecret(value: string | undefined | null): string {
   return `****${value.slice(-4)}`;
 }
 
-/** Rekurencyjnie maskuje pola api_token / authorization w obiektach logowanych. */
+/** Rekurencyjnie maskuje pola zawierające sekrety API i OAuth. */
 export function maskDeep<T>(input: T): T {
   if (typeof input === "string") return input as T;
   if (Array.isArray(input)) return input.map((v) => maskDeep(v)) as unknown as T;
   if (input && typeof input === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-      if (/api_token|authorization|token/i.test(k) && typeof v === "string") {
+      if (
+        /api[_-]?(?:token|key)|apikey|authorization|token|client[_-]?secret|code[_-]?verifier|csrf|klucz|secret/i.test(
+          k,
+        ) &&
+        typeof v === "string"
+      ) {
         out[k] = maskSecret(v);
       } else {
         out[k] = maskDeep(v);
