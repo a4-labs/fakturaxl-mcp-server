@@ -14,14 +14,27 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
-function pageShell(title: string, content: string, nonce: string): AuthorizationPage {
+function callbackCspSource(redirectUri: string | undefined): string | undefined {
+  if (!redirectUri) return undefined;
+  try {
+    const parsed = new URL(redirectUri);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.origin : parsed.protocol;
+  } catch {
+    return undefined;
+  }
+}
+
+function pageShell(title: string, content: string, nonce: string, redirectUri?: string): AuthorizationPage {
+  const formActionSources = ["'self'", callbackCspSource(redirectUri)].filter(
+    (source): source is string => source !== undefined,
+  );
   return {
     contentSecurityPolicy: [
       "default-src 'none'",
       `style-src 'nonce-${nonce}'`,
       `script-src 'nonce-${nonce}'`,
       "base-uri 'none'",
-      "form-action 'self'",
+      `form-action ${formActionSources.join(" ")}`,
       "frame-ancestors 'none'",
     ].join("; "),
     html: `<!doctype html>
@@ -175,6 +188,7 @@ function pageShell(title: string, content: string, nonce: string): Authorization
 export function authorizationPage(input: {
   pendingId: string;
   csrfToken: string;
+  redirectUri: string;
   error?: string;
 }): AuthorizationPage {
   const nonce = randomBytes(18).toString("base64");
@@ -184,7 +198,7 @@ export function authorizationPage(input: {
   return pageShell(
     "Połącz FakturaXL",
     `<h1>Połącz FakturaXL</h1>
-    <p>Podaj klucz API konta, które ma być dostępne w Cursorze.</p>
+    <p>Podaj klucz API konta, które ma być dostępne w kliencie MCP.</p>
     ${error}
     <form method="post" action="/oauth/authorize/complete">
       <input type="hidden" name="pending_id" value="${escapeHtml(input.pendingId)}">
@@ -199,6 +213,7 @@ export function authorizationPage(input: {
     </form>
     <p class="hint">Klucz zostanie sprawdzony, zaszyfrowany i zapisany wyłącznie na tym serwerze.</p>`,
     nonce,
+    input.redirectUri,
   );
 }
 
@@ -207,7 +222,7 @@ export function expiredAuthorizationPage(): AuthorizationPage {
   return pageShell(
     "Autoryzacja wygasła",
     `<h1>Autoryzacja wygasła</h1>
-    <p>Wróć do Cursora i rozpocznij łączenie z serwerem MCP ponownie.</p>`,
+    <p>Wróć do klienta MCP i rozpocznij łączenie z serwerem ponownie.</p>`,
     nonce,
   );
 }

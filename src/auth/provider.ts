@@ -175,7 +175,15 @@ export class FakturaXlOAuthProvider implements OAuthServerProvider {
       state: params.state,
       resource,
     });
-    sendPage(res, 200, authorizationPage({ pendingId: pending.id, csrfToken: pending.csrfToken }));
+    sendPage(
+      res,
+      200,
+      authorizationPage({
+        pendingId: pending.id,
+        csrfToken: pending.csrfToken,
+        redirectUri: params.redirectUri,
+      }),
+    );
   }
 
   async completeAuthorization(req: Request, res: Response): Promise<void> {
@@ -199,6 +207,7 @@ export class FakturaXlOAuthProvider implements OAuthServerProvider {
         authorizationPage({
           pendingId,
           csrfToken,
+          redirectUri: pending.redirectUri,
           error: "Przekroczono limit prób. Odczekaj 15 minut i rozpocznij autoryzację ponownie.",
         }),
       );
@@ -219,7 +228,7 @@ export class FakturaXlOAuthProvider implements OAuthServerProvider {
       sendPage(
         res,
         error instanceof ApiTokenValidationError ? 401 : 503,
-        authorizationPage({ pendingId, csrfToken, error: safeError }),
+        authorizationPage({ pendingId, csrfToken, redirectUri: pending.redirectUri, error: safeError }),
       );
       return;
     }

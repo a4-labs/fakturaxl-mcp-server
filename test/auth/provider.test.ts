@@ -126,6 +126,32 @@ describe("FakturaXlOAuthProvider", () => {
     ).rejects.toThrow(/publiczn/i);
   });
 
+  it("allows the trusted OAuth callback origin in the form CSP", async () => {
+    const { provider } = await fixture();
+    const redirectUri = TRUSTED_REMOTE_REDIRECT_URIS[0];
+    const client = await provider.clientsStore.registerClient!({
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+    });
+    const response = responseDouble();
+
+    await provider.authorize(
+      client,
+      {
+        codeChallenge: "pkce-challenge",
+        redirectUri,
+        resource: RESOURCE,
+        scopes: ["mcp:tools"],
+      },
+      response as unknown as Response,
+    );
+
+    expect(response.setHeader).toHaveBeenCalledWith(
+      "Content-Security-Policy",
+      expect.stringContaining("form-action 'self' https://chatgpt.com"),
+    );
+  });
+
   it("renders an accessible form and completes an authorization code flow", async () => {
     const { client, provider, validateApiToken } = await fixture();
     const authorizeResponse = responseDouble();
