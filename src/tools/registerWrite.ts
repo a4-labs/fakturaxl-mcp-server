@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "../logger.js";
-import { fakturaXlCall } from "../fakturaxl/client.js";
+import { FakturaXlError, fakturaXlCall } from "../fakturaxl/client.js";
 import { createDraft, draftExpiresAt, getDraft, markIssued } from "../fakturaxl/drafts.js";
-import { buildPodglad, buildXmlPayload, fakturaSchema } from "../fakturaxl/invoice.js";
+import { buildPodglad, buildXmlPayload, fakturaSchema, walidujFakture, type Podglad } from "../fakturaxl/invoice.js";
 import { tool } from "./runner.js";
 
 const PRZYGOTUJ_OPIS =
@@ -35,6 +35,7 @@ export function registerWriteTools(server: McpServer, apiToken: string): void {
     },
     async (args) =>
       tool("przygotuj_fakture", args, async () => {
+        walidujFakture(args);
         const podglad = buildPodglad(args);
         const draft = createDraft(apiToken, buildXmlPayload(args, apiToken), podglad);
         return {
@@ -87,15 +88,67 @@ export function registerWriteTools(server: McpServer, apiToken: string): void {
           unikatowy_kod: String(dokument.unikatowy_kod ?? ""),
         };
         markIssued(draft, wynik);
-
         logger.info("mcp.invoice_issued", { ...wynik, suma_brutto: draft.podglad.suma_brutto });
+
+        const platnosc = await upewnijSieOplacona(apiToken, wynik.dokument_id, draft.podglad);
         return {
           status: "WYSTAWIONA",
           ...wynik,
+          platnosc,
           suma_brutto: draft.podglad.suma_brutto,
           waluta: draft.podglad.waluta,
           uwaga: "Dokument jest wystawiony. Kwoty ostateczne sprawdzisz przez 'pobierz_dokument'.",
         };
       }),
   );
+}
+
+type WynikPlatnosci = {
+  status: "nieopłacona" | "opłacona" | "częściowo opłacona" | "nie sprawdzono";
+  ustawiono_recznie?: boolean;
+  uwaga?: string;
+};
+
+const STATUSY: Record<string, WynikPlatnosci["status"]> = {
+  "0": "nieopłacona",
+  "1": "częściowo opłacona",
+  "2": "opłacona",
+};
+
+/**
+ * Dokumentacja FakturaXL pokazuje kwota_oplacona/data_oplacenia w przykladzie
+ * dokument_dodaj.php, ale nie opisuje, czy to ustawia status "oplacona".
+ * Dlatego po wystawieniu sprawdzamy status i - jesli trzeba - ustawiamy go
+ * przez dokument_edycja.php (status=2), tak jak opisuje to dokumentacja.
+ * Faktura jest juz wystawiona, wiec bledy tutaj NIE moga przerwac narzedzia.
+ */
+async function upewnijSieOplacona(apiToken: string, dokumentId: string, podglad: Podglad): Promise<WynikPlatnosci> {
+  if (podglad.platnosc.status !== "opłacona" || dokumentId === "") {
+    return { status: podglad.platnosc.status };
+  }
+  try {
+    const odczyt = (await fakturaXlCall("dokument_odczytaj.php", { api_token: apiToken, dokument_id: dokumentId })) as {
+      dokument?: { status?: unknown };
+    };
+    if (String(odczyt?.dokument?.status ?? "") === "2") return { status: "opłacona" };
+
+    await fakturaXlCall("dokument_edycja.php", {
+      api_token: apiToken,
+      dokument_id: dokumentId,
+      status: 2,
+      data_oplacenia: podglad.platnosc.data_oplacenia,
+      rodzaj_platnosci: podglad.rodzaj_platnosci,
+    });
+    logger.info("mcp.invoice_marked_paid", { dokument_id: dokumentId });
+    return { status: "opłacona", ustawiono_recznie: true };
+  } catch (err) {
+    // Kod 37 = "Dokument zostal juz wczesniej oplacony" - czyli dokladnie to, czego chcemy.
+    if (err instanceof FakturaXlError && err.code === "37") return { status: "opłacona" };
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("mcp.invoice_mark_paid_failed", { dokument_id: dokumentId, error: message });
+    return {
+      status: "nie sprawdzono",
+      uwaga: `Faktura wystawiona, ale nie udało się potwierdzić statusu "opłacona" (${message}). Sprawdź w FakturaXL.`,
+    };
+  }
 }

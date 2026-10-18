@@ -13,7 +13,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE: ghcr.io/socialbuzzstudio/fakturaxl-mcp-server
+      IMAGE: ghcr.io/a4-labs/fakturaxl-mcp-server
     steps:
       - name: Checkout repozytorium
         uses: actions/checkout@v5
