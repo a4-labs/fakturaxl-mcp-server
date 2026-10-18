@@ -374,7 +374,7 @@ przez `workflow_dispatch` (`gh workflow run "Build & Deploy"`).
 
 Jak to działa:
 
-1. **Build i push** — obraz `ghcr.io/socialbuzzstudio/fakturaxl-mcp-server` w tagach `latest`
+1. **Build i push** — obraz `ghcr.io/a4-labs/fakturaxl-mcp-server` w tagach `latest`
    i wersji z `package.json`. Build używa `target: runtime` — to obowiązkowe, bo ostatnim
    etapem `Dockerfile` jest `dev` z hot-reloadem. Kompilacja TypeScript dzieje się w etapie
    build, więc błąd typów zatrzymuje CI. Publikacja idzie wbudowanym `GITHUB_TOKEN`
