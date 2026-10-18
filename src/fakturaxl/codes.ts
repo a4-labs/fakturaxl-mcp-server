@@ -97,7 +97,8 @@ export const FAKTURAXL_CODES: Record<string, string> = {
 };
 
 /** Kody oznaczajace poprawny odczyt (nie traktujemy ich jak blad). */
-export const SUCCESS_READ_CODES = new Set(["1", "5"]);
+// 33 = "Dokument zostal poprawnie zapisany" - odpowiedz dokument_edycja.php.
+export const SUCCESS_READ_CODES = new Set(["1", "5", "33"]);
 
 /** Kody oznaczajace blad autoryzacji (nieprawidlowy / zablokowany klucz). */
 export const AUTH_ERROR_CODES = new Set(["3", "70"]);
